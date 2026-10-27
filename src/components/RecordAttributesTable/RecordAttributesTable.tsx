@@ -601,6 +601,7 @@ const AttributeRow = React.memo((props: AttributeRowProps) => {
                       
                       <TextField 
                         data-cy="edit-field-input"
+                        data-testid="edit-field-input"
                         onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => e.stopPropagation()}
                         autoFocus
@@ -619,7 +620,7 @@ const AttributeRow = React.memo((props: AttributeRowProps) => {
                     <p style={v.cleaning_error ? styles.errorParagraph : styles.noErrorParagraph}>
                       {formatAttributeValue(v.value)}&nbsp;
                       {fieldIsSelected && !locked &&
-                                    <IconButton data-cy="edit-field-button" id='edit-field-icon' sx={styles.rowIconButton} onClick={handleClickEditIcon}>
+                                    <IconButton data-cy="edit-field-button" data-testid="edit-field-button" id='edit-field-icon' sx={styles.rowIconButton} onClick={handleClickEditIcon}>
                                       <EditIcon sx={styles.rowIcon}/>
                                     </IconButton>
                       }

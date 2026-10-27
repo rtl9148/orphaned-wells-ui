@@ -8,7 +8,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import KeyboardIcon from "@mui/icons-material/Keyboard";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { ImageCropper } from "../ImageCropper/ImageCropper";
-import { useKeyDown, scrollToAttribute, callAPI, deriveAttribute, getAttributeRowId, getActiveAttributeEntries } from "../../util";
+import { useKeyDown, scrollToAttribute, callAPI, deriveAttribute, getAttributeRowId, getActiveAttributeEntries, findCenter } from "../../util";
 import AttributesTable from "../RecordAttributesTable/RecordAttributesTable";
 import { DocumentContainerProps, updateFieldCoordinatesSignature, FieldID, RecordHistoryItem, Attribute } from "../../types";
 import { DocumentContainerStyles as styles } from "../../styles";
@@ -74,12 +74,19 @@ const DocumentContainer = ({
   const [rotationLoading, setRotationLoading] = useState(false);
   const attributesListRef = React.useRef<Attribute[]>([]);
   const displayIndexesRef = React.useRef<number[]>([]);
+  const zoomActionTriggeredRef = React.useRef(false);
 
-  const handleZoomIn = () => {
+  const handleZoomIn = (event?: React.MouseEvent<HTMLButtonElement>) => {
+    event?.stopPropagation();
+    event?.currentTarget.blur();
+    zoomActionTriggeredRef.current = true;
     setZoomScale((prev) => Math.min(MAX_ZOOM, prev + ZOOM_STEP));
   };
 
-  const handleZoomOut = () => {
+  const handleZoomOut = (event?: React.MouseEvent<HTMLButtonElement>) => {
+    event?.stopPropagation();
+    event?.currentTarget.blur();
+    zoomActionTriggeredRef.current = true;
     setZoomScale((prev) => Math.max(MIN_ZOOM, prev - ZOOM_STEP));
   };
 
@@ -88,11 +95,24 @@ const DocumentContainer = ({
       imageBoxRef.current.scrollLeft = 0;
       imageBoxRef.current.scrollTop = 0;
     }
-  }
+  };
 
-  const handleResetZoom = () => {
-    setZoomScale(MIN_ZOOM);
-    handleResetScroll();
+  const handleResetZoom = (event?: React.MouseEvent<HTMLButtonElement>) => {
+    event?.stopPropagation();
+    event?.currentTarget.blur();
+    if (displayPoints) {
+      zoomActionTriggeredRef.current = true;
+      setZoomScale(MIN_ZOOM);
+    } else {
+      setZoomScale(MIN_ZOOM);
+      handleResetScroll();
+    }
+  };
+
+  const handleZoomButtonKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "Enter" && displayIndexes.length > 0) {
+      event.preventDefault();
+    }
   };
 
   const imageDivStyle = {
@@ -160,6 +180,46 @@ const DocumentContainer = ({
     // console.log(`${pageNumber} -> ${visualPageNumber}`)
     return visualPageNumber;
   }, [image_whitespace]);
+
+  useEffect(() => {
+    if (!zoomActionTriggeredRef.current) return;
+    zoomActionTriggeredRef.current = false;
+
+    const imageBox = imageBoxRef.current;
+    if (!imageBox || !displayPoints) return;
+
+    const [centerX, centerY] = findCenter(displayPoints);
+    const visualPage = getVisualPageNumber(imgIndex);
+    const pageElement =
+      (imageBox.querySelector(`[data-page-index="${imgIndex}"]`) as HTMLElement | null) ||
+      document.getElementById("image-div");
+    const imgElement = (pageElement?.querySelector("img") as HTMLElement | null) || pageElement;
+
+    const boxRect = imageBox.getBoundingClientRect();
+    const targetRect = imgElement?.getBoundingClientRect();
+
+    let nextScrollLeft = 0;
+    let nextScrollTop = 0;
+
+    if (targetRect && (targetRect.width > 0 || targetRect.height > 0)) {
+      const bboxCenterX = (targetRect.left - boxRect.left) + imageBox.scrollLeft + (centerX / 100) * targetRect.width;
+      const bboxCenterY = (targetRect.top - boxRect.top) + imageBox.scrollTop + (centerY / 100) * targetRect.height;
+      nextScrollLeft = zoomScale <= MIN_ZOOM ? 0 : Math.max(0, bboxCenterX - imageBox.clientWidth / 2);
+      nextScrollTop = Math.max(0, bboxCenterY - imageBox.clientHeight / 2);
+    } else {
+      const baseWidth = imgElement?.clientWidth || pageElement?.clientWidth || imageBox.clientWidth || 1000;
+      const baseHeight = imgElement?.clientHeight || pageElement?.clientHeight || imageBox.clientHeight || 1000;
+      const scaledWidth = baseWidth * zoomScale;
+      const scaledHeight = baseHeight * zoomScale;
+      const bboxCenterX = (centerX / 100) * scaledWidth;
+      const bboxCenterY = (visualPage + centerY / 100) * scaledHeight;
+      nextScrollLeft = zoomScale <= MIN_ZOOM ? 0 : Math.max(0, bboxCenterX - (imageBox.clientWidth || 0) / 2);
+      nextScrollTop = Math.max(0, bboxCenterY - (imageBox.clientHeight || 0) / 2);
+    }
+
+    imageBox.scrollLeft = nextScrollLeft;
+    imageBox.scrollTop = nextScrollTop;
+  }, [zoomScale, displayPoints, imgIndex, getVisualPageNumber]);
 
   const getNextField = (direction: string = "down", currentIndexes: number[] = displayIndexes): [FieldID, number[][] | null] => {
     const traversalList = getActiveAttributeEntries(attributesList || []);
@@ -242,11 +302,20 @@ const DocumentContainer = ({
     const currentDisplayIndexes = displayIndexesRef.current;
     const fieldIsAlreadySelected = indexes.length === currentDisplayIndexes.length && indexes.every((val, index) => val === currentDisplayIndexes[index]);
     if (!forceDisplay && (!key || fieldIsAlreadySelected)) {
+      if (key && fieldIsAlreadySelected) {
+        setZoomScale(MIN_ZOOM);
+        if (imageBoxRef.current) {
+          imageBoxRef.current.scrollLeft = 0;
+        }
+      }
       setDisplayPoints(null);
       setDisplayIndexes([]);
     }
     else {
       setZoomScale(MIN_ZOOM);
+      if (imageBoxRef.current) {
+        imageBoxRef.current.scrollLeft = 0;
+      }
       setDisplayIndexes([...indexes]);
       let current_attr = deriveAttribute(indexes, attributesListRef.current);
       if (!current_attr) {
@@ -454,12 +523,13 @@ const DocumentContainer = ({
                         {hasRecordImages && (
                           <Box sx={styles.containerActions.right}>
                             <Tooltip title="Zoom In">
-                              <span>
+                              <span onClick={(e) => e.stopPropagation()}>
                                 <IconButton
                                   id="zoom-in-button"
                                   data-cy="zoom-in-button"
                                   data-testid="zoom-in-button"
                                   onClick={handleZoomIn}
+                                  onKeyDown={handleZoomButtonKeyDown}
                                   disabled={zoomScale >= MAX_ZOOM}
                                 >
                                   <ZoomInIcon />
@@ -467,12 +537,13 @@ const DocumentContainer = ({
                               </span>
                             </Tooltip>
                             <Tooltip title="Zoom Out">
-                              <span>
+                              <span onClick={(e) => e.stopPropagation()}>
                                 <IconButton
                                   id="zoom-out-button"
                                   data-cy="zoom-out-button"
                                   data-testid="zoom-out-button"
                                   onClick={handleZoomOut}
+                                  onKeyDown={handleZoomButtonKeyDown}
                                   disabled={zoomScale <= MIN_ZOOM}
                                 >
                                   <ZoomOutIcon />
@@ -480,12 +551,13 @@ const DocumentContainer = ({
                               </span>
                             </Tooltip>
                               <Tooltip title="Reset Zoom">
-                                <span>
+                                <span onClick={(e) => e.stopPropagation()}>
                                   <IconButton
                                     id="zoom-reset-button"
                                     data-cy="zoom-reset-button"
                                     data-testid="zoom-reset-button"
                                     onClick={handleResetZoom}
+                                    onKeyDown={handleZoomButtonKeyDown}
                                     disabled={zoomScale <= MIN_ZOOM}
                                   >
                                     <RestartAltIcon />
@@ -575,7 +647,7 @@ const DocumentContainer = ({
                                           overflow: "visible",
                                         }}
                                       >
-                                        <div style={imageDivStyle} id="image-div">
+                                        <div style={imageDivStyle} id="image-div" data-page-index={idx}>
                                           <ImageCropper
                                             image={imageFile}
                                             imageIdx={idx}
